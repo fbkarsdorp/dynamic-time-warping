@@ -1,0 +1,3 @@
+# Dynamic Time Warping
+
+Dynamic Time Warping (DTW) is an algorithm for measuring the similarity of distance between two temporal sequences. One of the most interesting aspects of DTW is that the two sequences may vary in time or speed. This packages provides a simple implementation of DTW in Python (using Cython). It supports Euclidean and Manhattan distance between the data points and implements a slanted band constraint similar to the one implemented in R's dtw package.
