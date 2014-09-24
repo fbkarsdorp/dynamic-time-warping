@@ -116,7 +116,6 @@ def dtw_distance(np.ndarray[DTYPE_t, ndim=1] s, np.ndarray[DTYPE_t, ndim=1] t,
     
     transpose_cost = False
     if n < m:
-        print 'smaller, transposing cost'
         transpose_cost = True
         n, m = m, n
         s, t = t, s 
@@ -147,7 +146,7 @@ def dtw_distance(np.ndarray[DTYPE_t, ndim=1] s, np.ndarray[DTYPE_t, ndim=1] t,
     dist = dtw[n-1, m-1]
     if normalized and step_pattern == 2:
         dist = dist / (n + m)
-    return dist, dtw
+    return dist
 
 def dtw_slanted_band(s, t, window, metric='euclidean', normalized=False, step_pattern=1):
     """DTW constrained by slanted band of width 2k+1. The warping path is 
