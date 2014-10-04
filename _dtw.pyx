@@ -3,17 +3,12 @@ cimport numpy as np
 np.import_array()
 cimport cython
 from libc.math cimport fabs, sqrt, ceil
+from libc.stdlib cimport *
+from cdtw cimport *
 
 
 ctypedef np.double_t DTYPE_t
 
-cdef double min3(double a, double b, double c):
-    cdef double m = a
-    if b < m:
-        m = b
-    if c < m:
-        m = c
-    return m
 
 cdef class Distance:
     cpdef double dist(self, double a, double b) except *:
@@ -30,6 +25,23 @@ cdef class SquaredEuclidean(Distance):
 cdef class Manhattan(Distance):
     cpdef double dist(self, double a, double b) except *:
         return fabs(a - b)
+
+
+cdef retrace_path(int n, int m, np.ndarray[DTYPE_t, ndim=2] dtw):
+    cdef Path p 
+    cdef np.ndarray[np.int_t, ndim=1] px_arr
+    cdef np.ndarray[np.int_t, ndim=1] py_arr
+
+    path(<double *> dtw.data, n, m, -1, -1, &p)
+    px_arr = np.empty(p.k, dtype=np.int)
+    py_arr = np.empty(p.k, dtype=np.int)
+    for i in range(p.k):
+        px_arr[i] = p.px[i]
+        py_arr[i] = p.py[i]
+    free (p.px)
+    free (p.py)
+    return px_arr, py_arr
+
 
 @cython.boundscheck(False)
 cdef void fill_cost_matrix_unconstrained(np.ndarray[DTYPE_t, ndim=2] dtw,
@@ -59,8 +71,8 @@ cdef void fill_cost_matrix_unconstrained(np.ndarray[DTYPE_t, ndim=2] dtw,
 
 # slanted band constraint as in R's dtw package
 @cython.cdivision(True)
-cdef inline int slanted_band_constraint(int i, int j, int n, int m, int w):
-    return abs((j+1) - ((i+1) * float(m) / float(n))) <= w
+cdef inline int slanted_band_constraint(int i, int j, double slant, int w):
+    return fabs((j+1) - ((i+1) * slant)) <= w
 
 @cython.boundscheck(False)
 cdef void fill_cost_matrix_with_slanted_band_constraint(np.ndarray[DTYPE_t, ndim=2] dtw,
@@ -73,24 +85,22 @@ cdef void fill_cost_matrix_with_slanted_band_constraint(np.ndarray[DTYPE_t, ndim
 
     cdef unsigned int i, j
     cdef DTYPE_t cost, insert, delete, replace
+    cdef double slant = float(m) / float(n)
 
-    for i in range(n):
-        for j in range(m):
-            dtw[i, j] = np.inf
-
+    dtw.fill(np.inf)
     dtw[0, 0] = cost_fn.dist(s[0], t[0])
 
     for i in range(1, n):
-        if slanted_band_constraint(i, 0, n, m, window):
+        if slanted_band_constraint(i, 0, slant, window):
             dtw[i, 0] = cost_fn.dist(s[i], t[0]) + dtw[i-1, 0]
 
     for j in range(1, m):
-        if slanted_band_constraint(0, j, n, m, window):
+        if slanted_band_constraint(0, j, slant, window):
             dtw[0, j] = cost_fn.dist(s[0], t[j]) + dtw[0, j-1]
 
     for i in range(1, n):
         for j in range(1, m):
-            if slanted_band_constraint(i, j, n, m, window):
+            if slanted_band_constraint(i, j, slant, window):
                 cost = cost_fn.dist(s[i], t[j])
                 delete = cost + dtw[i-1, j]
                 insert = cost + dtw[i, j-1]
@@ -101,7 +111,7 @@ cdef void fill_cost_matrix_with_slanted_band_constraint(np.ndarray[DTYPE_t, ndim
 
 def dtw_distance(np.ndarray[DTYPE_t, ndim=1] s, np.ndarray[DTYPE_t, ndim=1] t, 
                  int step_pattern=1, str metric='euclidean', constraint='None',
-                 normalized=False, int window=0):
+                 normalized=False, int window=0, dist_only=True):
     """Implementation of the Dynamic Time Warping algorithm. The implementation 
     expects two numpy arrays as input and returns the DTW distance. This distance can 
     be normzalized in case the step patterns equals 2 (d / (m + n)). Two metrics are 
@@ -127,6 +137,8 @@ def dtw_distance(np.ndarray[DTYPE_t, ndim=1] s, np.ndarray[DTYPE_t, ndim=1] t,
         cost_fn = Euclidean()
     elif metric == 'manhattan':
         cost_fn = Manhattan()
+    elif metric == 'seuclidean':
+        cost_fn = SquaredEuclidean()
     else:
         raise ValueError("Metric '%s' is not supported." % metric)
     
@@ -146,7 +158,10 @@ def dtw_distance(np.ndarray[DTYPE_t, ndim=1] s, np.ndarray[DTYPE_t, ndim=1] t,
     dist = dtw[n-1, m-1]
     if normalized and step_pattern == 2:
         dist = dist / (n + m)
-    return dist
+    if dist_only:
+        return dist
+    px_arr, py_arr = retrace_path(n, m, dtw)
+    return dist, dtw, (px_arr, py_arr)
 
 def dtw_slanted_band(s, t, window, metric='euclidean', normalized=False, step_pattern=1):
     """DTW constrained by slanted band of width 2k+1. The warping path is 
