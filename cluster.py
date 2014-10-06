@@ -3,7 +3,6 @@ import pandas as pd
 from scipy.cluster.hierarchy import ClusterNode
 from HACluster import Clusterer
 from dtw import dtw_distance
-from dgw.dtw.transformations import sdtw_averaging
 from functools import partial
 
 def to_tree(data, Z, averaging_fn):
