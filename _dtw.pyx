@@ -14,18 +14,41 @@ cdef class Distance:
     cpdef double dist(self, double a, double b) except *:
         return 0
 
-cdef class Euclidean(Distance):
-    cpdef double dist(self, double a, double b) except *:
-        return (a - b) ** 2
-
 cdef class SquaredEuclidean(Distance):
     cpdef double dist(self, double a, double b) except *:
-        return sqrt((a - b) ** 2)
+        cdef double dist = (a - b)
+        return dist * dist
+
+cdef class Euclidean(Distance):
+    cpdef double dist(self, double a, double b) except *:
+        cdef double dist = a - b
+        return sqrt(dist * dist)
 
 cdef class Manhattan(Distance):
     cpdef double dist(self, double a, double b) except *:
         return fabs(a - b)
 
+
+def average_sequence(np.ndarray[DTYPE_t, ndim=1] path, 
+                     np.ndarray[DTYPE_t, ndim=1] positions, 
+                     int length):
+    cdef np.ndarray[DTYPE_t, ndim=1] new_array = np.zeros(length, dtype=np.float)
+    cdef unsigned int i, j
+
+    for i in range(1, int(round(max(positions)))):
+        for j in range(len(positions)):
+            if positions[j] == i:
+                new_array[i-1] = path[j]
+                break
+            elif positions[j] > i:
+                if j == len(positions)-1:
+                    new_array[i-1] = path[j]
+                else:
+                    new_array[i-1] = 0.5 * path[j+1] + 0.5 * path[j]
+                break
+            elif j == 0:
+                new_array[i-1] = path[j]
+    return new_array
 
 cdef retrace_path(int n, int m, np.ndarray[DTYPE_t, ndim=2] dtw):
     cdef Path p 
@@ -69,6 +92,40 @@ cdef void fill_cost_matrix_unconstrained(np.ndarray[DTYPE_t, ndim=2] dtw,
             replace = cost * step_pattern + dtw[i-1, j-1]
             dtw[i, j] = min3(insert, delete, replace)
 
+cdef inline int sakoe_chiba_constraint(int i, int j, int w):
+    return fabs(i - j) <= w
+
+@cython.boundscheck(False)
+cdef void fill_cost_matrix_with_sakoe_chiba_constraint(np.ndarray[DTYPE_t, ndim=2] dtw,
+                                                       np.ndarray[DTYPE_t, ndim=1] s,
+                                                       np.ndarray[DTYPE_t, ndim=1] t,
+                                                       int n, int m,
+                                                       double step_pattern,
+                                                       Distance cost_fn,
+                                                       int window):
+    cdef unsigned int i, j
+    cdef DTYPE_t cost, insert, delete, replace
+    
+    dtw.fill(np.inf)
+    dtw[0, 0] = cost_fn.dist(s[0], t[0])
+
+    for i in range(1, n):
+        if sakoe_chiba_constraint(i, 0, window):
+            dtw[i, 0] = cost_fn.dist(s[i], t[0]) + dtw[i-1, 0]
+
+    for j in range(1, m):
+        if sakoe_chiba_constraint(0, j, window):
+            dtw[0, j] = cost_fn.dist(s[0], t[j]) + dtw[0, j-1]
+
+    for i in range(1, n):
+        for j in range(1, m):
+            if sakoe_chiba_constraint(i, j, window):
+                cost = cost_fn.dist(s[i], t[j])
+                delete = cost + dtw[i-1, j]
+                insert = cost + dtw[i, j-1]
+                replace = cost * step_pattern + dtw[i-1, j-1]
+                dtw[i, j] = min3(delete, replace, insert)
+
 # slanted band constraint as in R's dtw package
 @cython.cdivision(True)
 cdef inline int slanted_band_constraint(int i, int j, double slant, int w):
@@ -110,14 +167,14 @@ cdef void fill_cost_matrix_with_slanted_band_constraint(np.ndarray[DTYPE_t, ndim
 
 
 def dtw_distance(np.ndarray[DTYPE_t, ndim=1] s, np.ndarray[DTYPE_t, ndim=1] t, 
-                 int step_pattern=1, str metric='euclidean', constraint='None',
+                 int step_pattern=1, str metric='seuclidean', constraint='None',
                  normalized=False, int window=0, dist_only=True):
     """Implementation of the Dynamic Time Warping algorithm. The implementation 
     expects two numpy arrays as input and returns the DTW distance. This distance can 
     be normzalized in case the step patterns equals 2 (d / (m + n)). Two metrics are 
     supported: euclidean distance and manhattan distance. It is also possible to 
-    contrain the band through the matrix using a slanted band constraint with a 
-    particular window size k.
+    contrain the band through the matrix using a slanted band constraint or the
+    more famous Sakoe Chiba constraint with a particular window size k.
     """
 
     cdef double dist
@@ -148,6 +205,8 @@ def dtw_distance(np.ndarray[DTYPE_t, ndim=1] s, np.ndarray[DTYPE_t, ndim=1] t,
         if window < 0:
             raise ValueError("Window size must be greater than or equal to 0.")
         fill_cost_matrix_with_slanted_band_constraint(dtw, s, t, n, m, step_pattern, cost_fn, window)
+    elif constraint == 'sakoe_chiba':
+        fill_cost_matrix_with_sakoe_chiba_constraint(dtw, s, t, n, m, step_pattern, cost_fn, window)
     else:
         raise ValueError("Constraint '%s' is not supported." % constraint)
 
@@ -166,5 +225,8 @@ def dtw_distance(np.ndarray[DTYPE_t, ndim=1] s, np.ndarray[DTYPE_t, ndim=1] t,
 def dtw_slanted_band(s, t, window, metric='euclidean', normalized=False, step_pattern=1):
     """DTW constrained by slanted band of width 2k+1. The warping path is 
     constrained by |i*len(x)/len(k)-j| <= k."""
-
     return dtw_distance(s, t, step_pattern, metric, 'slanted_band', normalized, window)
+
+def dtw_sakoe_shiba(s, t, window, metric='euclidean', normalized=False, step_pattern=1):
+    """DTW constrained by Sakoe Shiba band."""
+    return dtw_distance(s, t, step_pattern, metric, 'sakoe_chiba', normalized, window)

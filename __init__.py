@@ -1,4 +1,4 @@
-from _dtw import dtw_distance, dtw_slanted_band
+from _dtw import dtw_distance, dtw_slanted_band, dtw_sakoe_shiba, average_sequence
 from cluster import *
 
 from joblib import Parallel, delayed
